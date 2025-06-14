@@ -2,8 +2,9 @@ package bybit_connector
 
 import (
 	"context"
-	"github.com/bybit-exchange/bybit.go.api/handlers"
 	"net/http"
+
+	"github.com/zucler/bybit.go.api/handlers"
 )
 
 func (s *BybitClientRequest) PlaceSpreadTradeOrder(ctx context.Context, opts ...RequestOption) (res *ServerResponse, err error) {

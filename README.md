@@ -44,7 +44,7 @@ require (
 ```
 
 To import my package you need just to put the link to your go mode file
-**github.com/bybit-exchange/bybit.go.api**
+**github.com/zucler/bybit.go.api**
 
 ## Usage
 Note: Replace placeholders (like YOUR_API_KEY, links, or other details) with the actual information. You can also customize this template to better fit the actual state and details of your Java API.

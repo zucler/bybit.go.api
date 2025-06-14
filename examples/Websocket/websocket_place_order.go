@@ -2,8 +2,9 @@ package main
 
 import (
 	"fmt"
-	bybit "github.com/bybit-exchange/bybit.go.api"
 	"time"
+
+	bybit "github.com/zucler/bybit.go.api"
 )
 
 func main() {
