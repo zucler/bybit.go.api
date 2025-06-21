@@ -118,12 +118,21 @@ func NewBybitPublicWebSocket(url string, handler MessageHandler) *WebSocket {
 }
 
 func (b *WebSocket) Connect() *WebSocket {
+	// stop any existing loops first
+	if b.cancel != nil {
+		b.cancel() // closes ctx.Done() for the old ping & monitor
+	}
+
 	var err error
 	wssUrl := b.url
 	if b.maxAliveTime != "" {
 		wssUrl += "?max_alive_time=" + b.maxAliveTime
 	}
 	b.conn, _, err = websocket.DefaultDialer.Dial(wssUrl, nil)
+	if err != nil {
+		fmt.Println("Failed to connect to WebSocket:", err)
+		return nil
+	}
 
 	if b.requiresAuthentication() {
 		if err = b.sendAuth(); err != nil {
