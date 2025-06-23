@@ -13,6 +13,7 @@ import (
 )
 
 type MessageHandler func(message string) error
+type ReconnectHandler func() error
 
 func (b *WebSocket) handleIncomingMessages() {
 	for {
@@ -41,18 +42,23 @@ func (b *WebSocket) monitorConnection() {
 		<-ticker.C
 		if !b.isConnected && b.ctx.Err() == nil { // Check if disconnected and context not done
 			fmt.Println("Attempting to reconnect...")
-			con := b.Connect() // Example, adjust parameters as needed
+			con := b.Connect()
 			if con == nil {
 				fmt.Println("Reconnection failed:")
 			} else {
-				b.isConnected = true
-				go b.handleIncomingMessages() // Restart message handling
+				fmt.Println("Reconnection successful")
+				// Call reconnect handler if set
+				if b.onReconnect != nil {
+					if err := b.onReconnect(); err != nil {
+						fmt.Println("Error in reconnect handler:", err)
+					}
+				}
 			}
 		}
 
 		select {
 		case <-b.ctx.Done():
-			return // Stop the routine if context is done
+			return
 		default:
 		}
 	}
@@ -60,6 +66,10 @@ func (b *WebSocket) monitorConnection() {
 
 func (b *WebSocket) SetMessageHandler(handler MessageHandler) {
 	b.onMessage = handler
+}
+
+func (b *WebSocket) SetReconnectHandler(handler ReconnectHandler) {
+	b.onReconnect = handler
 }
 
 type WebSocket struct {
@@ -70,9 +80,14 @@ type WebSocket struct {
 	maxAliveTime string
 	pingInterval int
 	onMessage    MessageHandler
+	onReconnect  ReconnectHandler
 	ctx          context.Context
 	cancel       context.CancelFunc
 	isConnected  bool
+
+	// New fields for writer pattern
+	writeChan chan []byte
+	writeDone chan struct{}
 }
 
 type WebsocketOption func(*WebSocket)
@@ -118,9 +133,14 @@ func NewBybitPublicWebSocket(url string, handler MessageHandler) *WebSocket {
 }
 
 func (b *WebSocket) Connect() *WebSocket {
-	// stop any existing loops first
+	// Stop any existing loops first
 	if b.cancel != nil {
-		b.cancel() // closes ctx.Done() for the old ping & monitor
+		b.cancel()
+		// Wait for writer to finish
+		select {
+		case <-b.writeDone:
+		case <-time.After(2 * time.Second):
+		}
 	}
 
 	var err error
@@ -134,6 +154,14 @@ func (b *WebSocket) Connect() *WebSocket {
 		return nil
 	}
 
+	// Initialize writer pattern BEFORE authentication
+	b.writeChan = make(chan []byte, 100)
+	b.writeDone = make(chan struct{})
+	b.ctx, b.cancel = context.WithCancel(context.Background())
+
+	// Start writer goroutine BEFORE authentication
+	go b.writer()
+
 	if b.requiresAuthentication() {
 		if err = b.sendAuth(); err != nil {
 			fmt.Println("Failed Connection:", fmt.Sprintf("%v", err))
@@ -142,13 +170,77 @@ func (b *WebSocket) Connect() *WebSocket {
 	}
 	b.isConnected = true
 
+	// Start remaining goroutines
 	go b.handleIncomingMessages()
 	go b.monitorConnection()
-
-	b.ctx, b.cancel = context.WithCancel(context.Background())
-	go ping(b)
+	go b.pinger() // Ping goroutine that sends to writeChan
 
 	return b
+}
+
+// Single writer goroutine - no race conditions possible
+func (b *WebSocket) writer() {
+	defer close(b.writeDone)
+
+	for {
+		select {
+		case data := <-b.writeChan:
+			if err := b.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+				fmt.Println("Failed to write message:", err)
+				b.isConnected = false
+				return
+			}
+		case <-b.ctx.Done():
+			return
+		}
+	}
+}
+
+// Ping goroutine that sends to write channel
+func (b *WebSocket) pinger() {
+	if b.pingInterval <= 0 {
+		return
+	}
+
+	ticker := time.NewTicker(time.Duration(b.pingInterval) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			currentTime := time.Now().Unix()
+			pingMessage := map[string]string{
+				"op":     "ping",
+				"req_id": fmt.Sprintf("%d", currentTime),
+			}
+			jsonPingMessage, err := json.Marshal(pingMessage)
+			if err != nil {
+				fmt.Println("Failed to marshal ping message:", err)
+				continue
+			}
+
+			// Send to writer channel (non-blocking)
+			select {
+			case b.writeChan <- jsonPingMessage:
+			case <-b.ctx.Done():
+				return
+			}
+		case <-b.ctx.Done():
+			return
+		}
+	}
+}
+
+// Updated send method
+func (b *WebSocket) send(message string) error {
+	select {
+	case b.writeChan <- []byte(message):
+		return nil
+	case <-b.ctx.Done():
+		return fmt.Errorf("websocket closed")
+	default:
+		return fmt.Errorf("write channel full")
+	}
 }
 
 func (b *WebSocket) SendSubscription(args []string) (*WebSocket, error) {
@@ -203,41 +295,6 @@ func (b *WebSocket) SendTradeRequest(tradeTruest map[string]interface{}) (*WebSo
 	return b, nil
 }
 
-func ping(b *WebSocket) {
-	if b.pingInterval <= 0 {
-		fmt.Println("Ping interval is set to a non-positive value.")
-		return
-	}
-
-	ticker := time.NewTicker(time.Duration(b.pingInterval) * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			currentTime := time.Now().Unix()
-			pingMessage := map[string]string{
-				"op":     "ping",
-				"req_id": fmt.Sprintf("%d", currentTime),
-			}
-			jsonPingMessage, err := json.Marshal(pingMessage)
-			if err != nil {
-				fmt.Println("Failed to marshal ping message:", err)
-				continue
-			}
-			if err := b.conn.WriteMessage(websocket.TextMessage, jsonPingMessage); err != nil {
-				fmt.Println("Failed to send ping:", err)
-				return
-			}
-			// fmt.Println("Ping sent with UTC time:", currentTime)
-
-		case <-b.ctx.Done():
-			fmt.Println("Ping context closed, stopping ping.")
-			return
-		}
-	}
-}
-
 func (b *WebSocket) Disconnect() error {
 	b.cancel()
 	b.isConnected = false
@@ -283,8 +340,4 @@ func (b *WebSocket) sendAsJson(v interface{}) error {
 		return err
 	}
 	return b.send(string(data))
-}
-
-func (b *WebSocket) send(message string) error {
-	return b.conn.WriteMessage(websocket.TextMessage, []byte(message))
 }
