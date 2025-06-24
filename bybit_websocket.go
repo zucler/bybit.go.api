@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -21,6 +22,7 @@ func (b *WebSocket) handleIncomingMessages() {
 		if err != nil {
 			fmt.Println("Error reading:", err)
 			b.isConnected = false
+			b.conn.Close()
 			return
 		}
 
@@ -188,6 +190,7 @@ func (b *WebSocket) writer() {
 			if err := b.conn.WriteMessage(websocket.TextMessage, data); err != nil {
 				fmt.Println("Failed to write message:", err)
 				b.isConnected = false
+				b.conn.Close()
 				return
 			}
 		case <-b.ctx.Done():
@@ -222,6 +225,7 @@ func (b *WebSocket) pinger() {
 			// Send to writer channel (non-blocking)
 			select {
 			case b.writeChan <- jsonPingMessage:
+				fmt.Println("Ping sent successfully.")
 			case <-b.ctx.Done():
 				return
 			}
