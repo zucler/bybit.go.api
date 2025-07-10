@@ -19,7 +19,12 @@ func (b *WebSocket) handleIncomingMessages() {
 	for {
 		_, message, err := b.conn.ReadMessage()
 		if err != nil {
-			fmt.Println("Error reading:", err)
+			// Provide detailed close information when available
+			if closeErr, ok := err.(*websocket.CloseError); ok {
+				fmt.Printf("WebSocket closed: code=%d, text=%s\n", closeErr.Code, closeErr.Text)
+			} else {
+				fmt.Println("Error reading:", err)
+			}
 			b.isConnected = false
 			b.conn.Close()
 			return
