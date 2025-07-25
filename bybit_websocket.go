@@ -51,6 +51,7 @@ func (b *WebSocket) monitorConnection() {
 			con := b.Connect()
 			if con == nil {
 				fmt.Println("Reconnection failed:")
+				fmt.Printf("Reconnection failed (will retry in 5s): check logs for dial/auth errors\n")
 			} else {
 				fmt.Println("Reconnection successful")
 				// Call reconnect handler if set
@@ -229,7 +230,7 @@ func (b *WebSocket) pinger() {
 			// Send to writer channel (non-blocking)
 			select {
 			case b.writeChan <- jsonPingMessage:
-				fmt.Println("Ping sent successfully.")
+				// fmt.Println("Ping sent successfully.")
 			case <-b.ctx.Done():
 				return
 			}
